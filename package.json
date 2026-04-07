@@ -6,6 +6,7 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "prisma generate --schema=packages/db/prisma/schema.prisma",
     "dev": "turbo dev --filter=@jobradar/web",
     "dev:all": "turbo dev",
     "dev:web": "turbo dev --filter=@jobradar/web",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "dotenv-cli": "^8.0.0",
+    "prisma": "^6.4.0",
     "turbo": "^2.4.0",
     "typescript": "^5.7.0"
   },
