@@ -23,3 +23,7 @@ This repository contains the Next.js frontend for JobRadar.
    - `npm run dev:web`
 
 Set `BACKEND_API_URL` in `.env.local` if backend runs on a different host/port.
+
+## Before pushing or deploying
+
+Run `npm run lint` or `npm run typecheck` from the repo root. That runs `tsc --noEmit` on the app and packages so TypeScript errors (including implicit `any`) show up **before** Vercel’s `next build`. CI runs the same checks.

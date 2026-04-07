@@ -62,7 +62,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       company: j.company,
     }));
 
-  const watchedCompanies = watchlists.map((w) => ({
+  type WatchlistRow = (typeof watchlists)[number];
+  const watchedCompanies = watchlists.map((w: WatchlistRow) => ({
     slug: w.company.slug,
     name: w.company.name,
     logoUrl: w.company.logoUrl,
