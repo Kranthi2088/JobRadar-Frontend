@@ -46,9 +46,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     take: 100,
   });
 
+  type JobRow = (typeof initialJobsRaw)[number];
   const initialJobs = initialJobsRaw
-    .filter((j) => isUnitedStatesJobLocationOrTitle(j.location, j.title))
-    .map((j) => ({
+    .filter((j: JobRow) => isUnitedStatesJobLocationOrTitle(j.location, j.title))
+    .map((j: JobRow) => ({
       id: j.id,
       externalId: j.externalId,
       title: j.title,
