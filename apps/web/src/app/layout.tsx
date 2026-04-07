@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Providers } from "@/components/providers";
 
 export const metadata: Metadata = {
   title: "JobRadar — Real-Time Job Alerts",
@@ -16,7 +17,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full">
       <body className="h-full bg-surface-bg text-jr-text1">
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

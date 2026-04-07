@@ -53,6 +53,7 @@ export function DashboardAddWatch({
     try {
       const res = await fetch("/api/watchlist", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyId: selected.id,

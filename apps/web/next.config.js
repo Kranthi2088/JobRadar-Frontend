@@ -16,19 +16,6 @@ const nextConfig = {
     root: monorepoRoot,
   },
   transpilePackages: ["@jobradar/db", "@jobradar/shared"],
-  async rewrites() {
-    const backendApiUrl = process.env.BACKEND_API_URL || "http://localhost:3002";
-    return [
-      {
-        source: "/api/auth/:path*",
-        destination: "/api/auth/:path*",
-      },
-      {
-        source: "/api/:path*",
-        destination: `${backendApiUrl}/api/:path*`,
-      },
-    ];
-  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**.googleusercontent.com" },

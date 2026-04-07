@@ -29,7 +29,7 @@ export default function LandingPage() {
             >
               Sign in
             </Link>
-            <Link href="/auth/signin" className="btn-primary h-8 px-4 text-sm">
+            <Link href="/auth/signup" className="btn-primary h-8 px-4 text-sm">
               Get Started
             </Link>
           </div>
@@ -50,7 +50,7 @@ export default function LandingPage() {
             <Link href="#how-it-works" className="btn-pill border-white text-white">
               Learn more
             </Link>
-            <Link href="/auth/signin" className="btn-primary gap-2">
+            <Link href="/auth/signup" className="btn-primary gap-2">
               Get Started <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
@@ -221,7 +221,7 @@ export default function LandingPage() {
                   ))}
                 </ul>
                 <Link
-                  href="/auth/signin"
+                  href="/auth/signup"
                   className={`mt-8 w-full text-center ${
                     plan.highlighted ? "btn-primary" : "btn-secondary"
                   }`}

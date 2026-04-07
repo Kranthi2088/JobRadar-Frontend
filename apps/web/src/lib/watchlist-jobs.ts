@@ -1,5 +1,5 @@
 import type { Prisma } from "@jobradar/db";
-import { recentJobPostedAfter } from "@jobradar/shared";
+import { recentJobPostedAfter, roleKeywordTokens } from "@jobradar/shared";
 
 type WatchlistRow = {
   companyId: string;
@@ -23,9 +23,19 @@ export function recentJobVisibilityWhere(): Prisma.JobWhereInput {
   };
 }
 
+export function recentJobVisibilityWhereWithWindow(
+  windowMs: number
+): Prisma.JobWhereInput {
+  const after = recentJobPostedAfter(windowMs);
+  return {
+    OR: [{ postedAt: { gte: after } }, { detectedAt: { gte: after } }],
+  };
+}
+
 /** Jobs that satisfy at least one watchlist row AND fall in the recent (24h) visibility window. */
 export function buildJobWhereFromWatchlists(
-  watchlists: WatchlistRow[]
+  watchlists: WatchlistRow[],
+  windowMs?: number
 ): Prisma.JobWhereInput {
   if (watchlists.length === 0) {
     return { id: { in: [] } };
@@ -36,13 +46,17 @@ export function buildJobWhereFromWatchlists(
       {
         OR: watchlists.map((wl) => {
           const parts: Prisma.JobWhereInput[] = [{ companyId: wl.companyId }];
-          const kw = wl.roleKeyword?.trim();
-          if (kw) {
-            parts.push({ title: { contains: kw, mode: "insensitive" } });
+          for (const t of roleKeywordTokens(wl.roleKeyword)) {
+            parts.push({ title: { contains: t, mode: "insensitive" } });
           }
           const loc = wl.locationFilter?.trim();
           if (loc) {
-            parts.push({ location: { contains: loc, mode: "insensitive" } });
+            parts.push({
+              OR: [
+                { location: { contains: loc, mode: "insensitive" } },
+                { title: { contains: loc, mode: "insensitive" } },
+              ],
+            });
           }
           const sen = wl.seniorityFilter?.trim();
           if (sen) {
@@ -56,7 +70,9 @@ export function buildJobWhereFromWatchlists(
           return { AND: parts };
         }),
       },
-      recentJobVisibilityWhere(),
+      windowMs
+        ? recentJobVisibilityWhereWithWindow(windowMs)
+        : recentJobVisibilityWhere(),
     ],
   };
 }

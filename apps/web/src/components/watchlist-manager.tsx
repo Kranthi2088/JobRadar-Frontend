@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useEffect } from "react";
 import { Logo } from "@/components/ui/logo";
 import { Btn } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
@@ -55,15 +54,59 @@ export function WatchlistManager({
   companies: Company[];
   plan: PlanType;
 }) {
-  const router = useRouter();
   const [watchlists, setWatchlists] = useState(initialWatchlists);
   const [search, setSearch] = useState("");
-  const [roleKeyword, setRoleKeyword] = useState("Software Engineer");
+  const [roleKeyword, setRoleKeyword] = useState(
+    () => initialWatchlists[0]?.roleKeyword?.trim() || "Software Engineer"
+  );
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
 
-  const limits = PLAN_LIMITS[plan];
+  const limits = PLAN_LIMITS[plan] ?? PLAN_LIMITS.free;
+
+  // Same origin + cookie as POST — reconciles UI if SSR DB and API DB ever disagree.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/watchlist", { credentials: "include" });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!Array.isArray(data) || cancelled) return;
+        const enriched: WatchlistItem[] = data.map((w: WatchlistItem) => {
+          const full = companies.find((c) => c.id === w.companyId);
+          return {
+            ...w,
+            company: full
+              ? { ...w.company, sources: full.sources }
+              : { ...w.company, sources: w.company?.sources ?? [] },
+          };
+        });
+        setWatchlists(enriched);
+        setError("");
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-time sync; companies is initial SSR list
+  }, []);
+
+  const atPlanLimit =
+    Number.isFinite(limits.maxCompanies) &&
+    watchlists.length >= limits.maxCompanies;
+
+  /** API can return 403 "at limit" while local state was still empty — don't show that stale banner. */
+  const showErrorBanner =
+    Boolean(error) &&
+    !(
+      !atPlanLimit &&
+      /free plan is limited|upgrade to pro for unlimited/i.test(error)
+    );
 
   const watchedIds = useMemo(
     () => new Set(watchlists.map((w) => w.companyId)),
@@ -85,6 +128,7 @@ export function WatchlistManager({
       try {
         const res = await fetch(`/api/watchlist/${existing.id}`, {
           method: "DELETE",
+          credentials: "include",
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -97,7 +141,6 @@ export function WatchlistManager({
         }
         setWatchlists((prev) => prev.filter((w) => w.id !== existing.id));
         setError("");
-        router.refresh();
       } catch {
         setError("Network error while removing.");
       }
@@ -113,6 +156,7 @@ export function WatchlistManager({
       try {
         const res = await fetch("/api/watchlist", {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             companyId: company.id,
@@ -125,7 +169,6 @@ export function WatchlistManager({
         }
         const newItem = await res.json();
         setWatchlists((prev) => [newItem, ...prev]);
-        router.refresh();
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -167,7 +210,7 @@ export function WatchlistManager({
             Select companies to monitor. We poll every 60 seconds.
           </p>
 
-          {error && (
+          {showErrorBanner && (
             <div
               className="mb-4 flex items-center gap-2 rounded-r2 px-4 py-3 text-sm"
               style={{
@@ -240,6 +283,7 @@ export function WatchlistManager({
             />
             {search && (
               <button
+                type="button"
                 onClick={() => setSearch("")}
                 className="border-none bg-transparent text-base leading-none text-jr-text3 cursor-pointer"
               >
@@ -258,13 +302,13 @@ export function WatchlistManager({
           >
             {filteredCompanies.map((c, i) => {
               const isWatched = watchedIds.has(c.id);
-              const primaryAts = c.sources[0]?.atsType || "Custom";
               return (
                 <div key={c.id}>
                   {i > 0 && <Divider />}
-                  <div
+                  <button
+                    type="button"
                     onClick={() => toggle(c)}
-                    className="flex cursor-pointer items-center gap-3.5 px-[18px] py-[13px] transition-colors duration-[120ms]"
+                    className="flex w-full cursor-pointer items-center gap-3.5 px-[18px] py-[13px] text-left transition-colors duration-[120ms] border-none"
                     style={{
                       background: isWatched
                         ? "#E8F0FB"
@@ -327,7 +371,7 @@ export function WatchlistManager({
                         </svg>
                       )}
                     </div>
-                  </div>
+                  </button>
                 </div>
               );
             })}
@@ -423,6 +467,7 @@ export function WatchlistManager({
                           </div>
                         </div>
                         <button
+                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             toggle(c);
@@ -451,8 +496,7 @@ export function WatchlistManager({
               )}
             </div>
 
-            {watchlists.length >= limits.maxCompanies &&
-              limits.maxCompanies !== Infinity && (
+            {atPlanLimit && (
                 <>
                   <Divider />
                   <div

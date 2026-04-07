@@ -1,7 +1,6 @@
 import type { NextAuthOptions } from "next-auth";
 import type { JWT } from "next-auth/jwt";
-import GoogleProvider from "next-auth/providers/google";
-import GitHubProvider from "next-auth/providers/github";
+import bcrypt from "bcryptjs";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { prisma } from "@jobradar/db";
@@ -14,23 +13,34 @@ const devLocalEnabled =
 function buildProviders() {
   const list = [];
 
-  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    list.push(
-      GoogleProvider({
-        clientId: process.env.GOOGLE_CLIENT_ID,
-        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      })
-    );
-  }
+  list.push(
+    CredentialsProvider({
+      id: "email-password",
+      name: "Email and password",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        const email = credentials?.email?.trim().toLowerCase();
+        const password = credentials?.password ?? "";
+        if (!email || !password) return null;
 
-  if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
-    list.push(
-      GitHubProvider({
-        clientId: process.env.GITHUB_CLIENT_ID,
-        clientSecret: process.env.GITHUB_CLIENT_SECRET,
-      })
-    );
-  }
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user?.passwordHash) return null;
+
+        const valid = await bcrypt.compare(password, user.passwordHash);
+        if (!valid) return null;
+
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          image: user.image,
+        };
+      },
+    })
+  );
 
   if (devLocalEnabled) {
     list.push(
@@ -82,6 +92,7 @@ function buildProviders() {
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
+  secret: process.env.NEXTAUTH_SECRET,
   providers: buildProviders(),
   callbacks: {
     jwt: async ({ token, user }): Promise<JWT> => {

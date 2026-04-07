@@ -1,20 +1,25 @@
+import { Suspense } from "react";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@jobradar/db";
 import { JobFeed } from "@/components/job-feed";
 import { buildJobWhereFromWatchlists } from "@/lib/watchlist-jobs";
-import type { PlanType } from "@jobradar/shared";
+import { isUnitedStatesJobLocationOrTitle } from "@jobradar/shared";
+import { parseTimelineHours } from "@/lib/dashboard-time-window";
 
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+type DashboardPageProps = {
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+};
 
-function fourHourCutoffDate(): Date {
-  return new Date(Date.now() - FOUR_HOURS_MS);
-}
-
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const session = await getServerSession(authOptions);
   const userId = (session!.user as any).id;
-  const plan = ((session!.user as any).plan || "free") as PlanType;
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const timelineRaw = resolvedSearchParams?.timeline;
+  const timeline = parseTimelineHours(
+    Array.isArray(timelineRaw) ? timelineRaw[0] : timelineRaw
+  );
+  const windowMs = timeline * 60 * 60 * 1000;
 
   const watchlists = await prisma.watchlist.findMany({
     where: { userId },
@@ -27,27 +32,10 @@ export default async function DashboardPage() {
     },
   });
 
-  const jobWhere = buildJobWhereFromWatchlists(watchlists);
-  const cutoff = fourHourCutoffDate();
+  const jobWhere = buildJobWhereFromWatchlists(watchlists, windowMs);
 
   const initialJobsRaw = await prisma.job.findMany({
-    where: {
-      AND: [
-        jobWhere,
-        {
-          OR: [{ postedAt: { gte: cutoff } }, { detectedAt: { gte: cutoff } }],
-        },
-        {
-          OR: [
-            { location: { contains: "United States", mode: "insensitive" } },
-            { location: { contains: "USA", mode: "insensitive" } },
-            { location: { contains: ", US", mode: "insensitive" } },
-            { location: { contains: " US ", mode: "insensitive" } },
-            { location: { contains: "Remote, US", mode: "insensitive" } },
-          ],
-        },
-      ],
-    },
+    where: jobWhere,
     include: {
       company: { select: { name: true, slug: true, logoUrl: true } },
     },
@@ -58,24 +46,20 @@ export default async function DashboardPage() {
     take: 100,
   });
 
-  const initialJobs = initialJobsRaw.map((j) => ({
-    id: j.id,
-    externalId: j.externalId,
-    title: j.title,
-    url: j.url,
-    team: j.team,
-    location: j.location,
-    seniority: j.seniority,
-    postedAt: j.postedAt ? j.postedAt.toISOString() : null,
-    detectedAt: j.detectedAt.toISOString(),
-    company: j.company,
-  }));
-
-  const companies = watchlists.map((w) => ({
-    id: w.company.id,
-    name: w.company.name,
-    slug: w.company.slug,
-  }));
+  const initialJobs = initialJobsRaw
+    .filter((j) => isUnitedStatesJobLocationOrTitle(j.location, j.title))
+    .map((j) => ({
+      id: j.id,
+      externalId: j.externalId,
+      title: j.title,
+      url: j.url,
+      team: j.team,
+      location: j.location,
+      seniority: j.seniority,
+      postedAt: j.postedAt ? j.postedAt.toISOString() : null,
+      detectedAt: j.detectedAt.toISOString(),
+      company: j.company,
+    }));
 
   const watchedCompanies = watchlists.map((w) => ({
     slug: w.company.slug,
@@ -84,10 +68,18 @@ export default async function DashboardPage() {
   }));
 
   return (
-    <JobFeed
-      initialJobs={initialJobs}
-      companies={companies}
-      watchedCompanies={watchedCompanies}
-    />
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-[1080px] px-8 py-10 text-sm text-jr-text2">
+          Loading feed…
+        </div>
+      }
+    >
+      <JobFeed
+        initialJobs={initialJobs}
+        watchedCompanies={watchedCompanies}
+        initialTimelineHours={timeline}
+      />
+    </Suspense>
   );
 }

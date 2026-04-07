@@ -1,10 +1,20 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { JobCard } from "./job-card";
 import { Logo } from "@/components/ui/logo";
 import { Divider } from "@/components/ui/divider";
 import { cn } from "@/lib/utils";
+import {
+  isUnitedStatesJobLocationOrTitle,
+} from "@jobradar/shared";
+import {
+  DEFAULT_TIMELINE_HOURS,
+  parseTimelineHours,
+  TIMELINE_HOUR_OPTIONS,
+  type TimelineHours,
+} from "@/lib/dashboard-time-window";
 
 interface Job {
   id: string;
@@ -23,19 +33,11 @@ interface Job {
   };
 }
 
-interface CompanyOption {
-  id: string;
-  name: string;
-  slug: string;
-}
-
 interface WatchedCompany {
   slug: string;
   name: string;
   logoUrl?: string | null;
 }
-
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
 function jobSortTime(job: Job): number {
   const raw = job.postedAt || job.detectedAt;
@@ -47,36 +49,157 @@ function isWithinLastHours(job: Job, hours: number): boolean {
   return ageMs <= hours * 60 * 60 * 1000;
 }
 
-function isUnitedStatesLocation(location: string | null): boolean {
-  if (!location) return false;
-  const s = location.toLowerCase();
+function matchesDashboardConstraints(job: Job, timelineHours: number): boolean {
   return (
-    s.includes("united states") ||
-    s.includes(" usa") ||
-    s.includes(", us") ||
-    s.includes("remote, us")
+    isWithinLastHours(job, timelineHours) &&
+    isUnitedStatesJobLocationOrTitle(job.location, job.title)
   );
 }
 
-function matchesDashboardConstraints(job: Job): boolean {
-  return isWithinLastHours(job, 4) && isUnitedStatesLocation(job.location);
+function parseFilter(v: string | null): "all" | "new" | "applied" {
+  if (v === "new" || v === "applied") return v;
+  return "all";
 }
 
-export function JobFeed({
+function parseCompanySlug(
+  raw: string | null,
+  watched: WatchedCompany[]
+): string {
+  if (!raw || raw === "all") return "all";
+  return watched.some((w) => w.slug === raw) ? raw : "all";
+}
+
+function normalizeWatchedCompanies(rows: any[]): WatchedCompany[] {
+  const bySlug = new Map<string, WatchedCompany>();
+  for (const r of rows) {
+    const c = r?.company;
+    if (!c?.slug || !c?.name || bySlug.has(c.slug)) continue;
+    bySlug.set(c.slug, {
+      slug: c.slug,
+      name: c.name,
+      logoUrl: c.logoUrl ?? null,
+    });
+  }
+  return Array.from(bySlug.values());
+}
+
+export function JobFeed(props: {
+  initialJobs: Job[];
+  watchedCompanies?: WatchedCompany[];
+  initialTimelineHours?: TimelineHours;
+}) {
+  return <JobFeedInner {...props} />;
+}
+
+function JobFeedInner({
   initialJobs,
-  companies,
   watchedCompanies = [],
+  initialTimelineHours = DEFAULT_TIMELINE_HOURS as TimelineHours,
 }: {
   initialJobs: Job[];
-  companies: CompanyOption[];
   watchedCompanies?: WatchedCompany[];
+  initialTimelineHours?: TimelineHours;
 }) {
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
+  const [watchedCompaniesState, setWatchedCompaniesState] =
+    useState<WatchedCompany[]>(watchedCompanies);
   const [connected, setConnected] = useState(false);
   const [readJobs, setReadJobs] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<"all" | "new" | "applied">("all");
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [filter, setFilter] = useState<"all" | "new" | "applied">(() =>
+    parseFilter(searchParams.get("filter"))
+  );
+  const [companyFilter, setCompanyFilter] = useState(
+    () => parseCompanySlug(searchParams.get("company"), watchedCompaniesState)
+  );
+  const [timelineHours, setTimelineHours] = useState<TimelineHours>(() =>
+    parseTimelineHours(searchParams.get("timeline") ?? String(initialTimelineHours))
+  );
+
+  const watchedSlugKey = useMemo(
+    () => watchedCompaniesState.map((w) => w.slug).sort().join(","),
+    [watchedCompaniesState]
+  );
+
+  // Sync filter UI from URL (back/forward, shared links). watchedSlugKey limits reruns when watchlist changes.
+  useEffect(() => {
+    setFilter(parseFilter(searchParams.get("filter")));
+    setCompanyFilter(
+      parseCompanySlug(searchParams.get("company"), watchedCompaniesState)
+    );
+    setTimelineHours(
+      parseTimelineHours(searchParams.get("timeline") ?? String(initialTimelineHours))
+    );
+  }, [searchParams, watchedSlugKey, initialTimelineHours]);
+
+  const setFilterWithUrl = useCallback(
+    (v: "all" | "new" | "applied") => {
+      setFilter(v);
+      const p = new URLSearchParams(searchParams.toString());
+      if (v === "all") p.delete("filter");
+      else p.set("filter", v);
+      const qs = p.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
+
+  const setCompanyWithUrl = useCallback(
+    (slug: string) => {
+      setCompanyFilter(slug);
+      const p = new URLSearchParams(searchParams.toString());
+      if (slug === "all") p.delete("company");
+      else p.set("company", slug);
+      const qs = p.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
   const [appliedJobs, setAppliedJobs] = useState<Set<string>>(new Set());
+  const reloadDashboardData = useCallback(
+    async (hours: TimelineHours) => {
+      try {
+        const [watchlistRes, jobsRes] = await Promise.all([
+          fetch("/api/watchlist", { credentials: "include", cache: "no-store" }),
+          fetch(`/api/jobs?limit=100&page=1&timeline=${hours}`, {
+            credentials: "include",
+            cache: "no-store",
+          }),
+        ]);
+        if (watchlistRes.ok) {
+          const rows = await watchlistRes.json();
+          if (Array.isArray(rows)) {
+            setWatchedCompaniesState(normalizeWatchedCompanies(rows));
+          }
+        }
+        if (jobsRes.ok) {
+          const payload = await jobsRes.json();
+          const rows = Array.isArray(payload?.jobs) ? payload.jobs : [];
+          setJobs(rows);
+        }
+      } catch {
+        // Keep existing data if reload fails.
+      }
+    },
+    []
+  );
+
+  const setTimelineWithUrl = useCallback(
+    async (hours: TimelineHours) => {
+      setTimelineHours(hours);
+      const p = new URLSearchParams(searchParams.toString());
+      if (hours === DEFAULT_TIMELINE_HOURS) p.delete("timeline");
+      else p.set("timeline", String(hours));
+      const qs = p.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      await reloadDashboardData(hours);
+    },
+    [pathname, reloadDashboardData, router, searchParams]
+  );
+
   const [nextPoll, setNextPoll] = useState(60);
   const [pulsing, setPulsing] = useState(false);
   const [newJobFlash, setNewJobFlash] = useState<Job | null>(null);
@@ -100,6 +223,22 @@ export function JobFeed({
     setJobs(initialJobs);
   }, [initialJobs]);
 
+  useEffect(() => {
+    setWatchedCompaniesState((prev) => {
+      // During route-segment refreshes, server props can momentarily be empty.
+      // Keep existing watched companies until we get a non-empty replacement.
+      if (watchedCompanies.length === 0 && prev.length > 0) return prev;
+      return watchedCompanies;
+    });
+  }, [watchedCompanies]);
+
+  useEffect(() => {
+    const hours = parseTimelineHours(
+      searchParams.get("timeline") ?? String(initialTimelineHours)
+    );
+    void reloadDashboardData(hours);
+  }, [searchParams, initialTimelineHours, reloadDashboardData]);
+
   const connectSSE = useCallback(() => {
     const eventSource = new EventSource("/api/jobs/stream");
 
@@ -109,10 +248,14 @@ export function JobFeed({
 
     eventSource.addEventListener("new-job", (event) => {
       const newJob = JSON.parse(event.data) as Job;
-      if (!matchesDashboardConstraints(newJob)) {
+      if (!matchesDashboardConstraints(newJob, timelineHours)) {
         return;
       }
-      setJobs((prev) => [newJob, ...prev]);
+      setJobs((prev) => {
+        // Update list in-place without page refresh; avoid duplicates on reconnect/overlap.
+        if (prev.some((j) => j.id === newJob.id)) return prev;
+        return [newJob, ...prev];
+      });
       setNewJobFlash(newJob);
       setTimeout(() => setNewJobFlash(null), 3500);
     });
@@ -124,7 +267,7 @@ export function JobFeed({
     };
 
     return eventSource;
-  }, []);
+  }, [timelineHours]);
 
   useEffect(() => {
     const es = connectSSE();
@@ -138,7 +281,7 @@ export function JobFeed({
 
   const filteredJobs = useMemo(() => {
     return sortedJobs.filter((job) => {
-      if (!matchesDashboardConstraints(job)) return false;
+      if (!matchesDashboardConstraints(job, timelineHours)) return false;
       if (companyFilter !== "all" && job.company.slug !== companyFilter) return false;
       if (filter === "new") {
         return isWithinLastHours(job, 1);
@@ -146,11 +289,11 @@ export function JobFeed({
       if (filter === "applied") return appliedJobs.has(job.id);
       return true;
     });
-  }, [sortedJobs, companyFilter, filter, appliedJobs]);
+  }, [sortedJobs, companyFilter, filter, appliedJobs, timelineHours]);
 
   const constrainedJobs = useMemo(
-    () => jobs.filter((j) => matchesDashboardConstraints(j)),
-    [jobs]
+    () => jobs.filter((j) => matchesDashboardConstraints(j, timelineHours)),
+    [jobs, timelineHours]
   );
 
   const newJobCount = useMemo(
@@ -167,7 +310,7 @@ export function JobFeed({
             Live feed
           </h1>
           <p className="text-sm text-jr-text2 font-text">
-            Watching {watchedCompanies.length} companies · {constrainedJobs.length} roles
+            Watching {watchedCompaniesState.length} companies · {constrainedJobs.length} roles
             found
           </p>
         </div>
@@ -227,7 +370,8 @@ export function JobFeed({
             ).map(([v, l]) => (
               <button
                 key={v}
-                onClick={() => setFilter(v)}
+                type="button"
+                onClick={() => setFilterWithUrl(v)}
                 className={cn(
                   "rounded-lg px-3.5 py-[5px] text-[12.5px] font-medium font-text border-none cursor-pointer transition-all duration-[120ms]",
                   filter === v
@@ -338,12 +482,35 @@ export function JobFeed({
             <Divider />
             <div className="p-3 px-[18px]">
               <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-jr-text3 font-text">
+                Timeline
+              </div>
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {TIMELINE_HOUR_OPTIONS.map((hours) => (
+                  <button
+                    key={hours}
+                    type="button"
+                    onClick={() => setTimelineWithUrl(hours)}
+                    className={cn(
+                      "rounded-pill border-none px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors",
+                      timelineHours === hours
+                        ? "bg-jr-accent text-white"
+                        : "bg-surface-bg text-jr-text2"
+                    )}
+                  >
+                    {hours}h
+                  </button>
+                ))}
+              </div>
+            </div>
+            <Divider />
+            <div className="p-3 px-[18px]">
+              <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-jr-text3 font-text">
                 Company filter
               </div>
               <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setCompanyFilter("all")}
+                  onClick={() => setCompanyWithUrl("all")}
                   className={cn(
                     "rounded-pill border-none px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors",
                     companyFilter === "all"
@@ -353,11 +520,11 @@ export function JobFeed({
                 >
                   All
                 </button>
-                {watchedCompanies.map((c) => (
+                {watchedCompaniesState.map((c) => (
                   <button
                     key={c.slug}
                     type="button"
-                    onClick={() => setCompanyFilter(c.slug)}
+                    onClick={() => setCompanyWithUrl(c.slug)}
                     className={cn(
                       "rounded-pill border-none px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors",
                       companyFilter === c.slug
@@ -376,7 +543,7 @@ export function JobFeed({
                 Watching
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {watchedCompanies.map((c) => (
+                {watchedCompaniesState.map((c) => (
                   <Logo
                     key={c.slug}
                     name={c.name}
@@ -385,7 +552,7 @@ export function JobFeed({
                     size={28}
                   />
                 ))}
-                {watchedCompanies.length === 0 && (
+                {watchedCompaniesState.length === 0 && (
                   <span className="text-xs text-jr-text3 font-text">
                     No companies watched
                   </span>

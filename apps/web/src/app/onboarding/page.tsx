@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Zap, ChevronRight, Search, Bell, Building2 } from "lucide-react";
-import { cn, getCompanyLogoUrl } from "@/lib/utils";
+import { cn, getCompanyLogoUrl, urlBase64ToUint8Array } from "@/lib/utils";
 
 const POPULAR_ROLES = [
   "Software Engineer",
@@ -18,14 +18,18 @@ const POPULAR_ROLES = [
   "Engineering Manager",
 ];
 
+type CompanyPick = { id: string; name: string; logoUrl?: string | null };
+
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [role, setRole] = useState("");
-  const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedById, setSelectedById] = useState<Record<string, CompanyPick>>({});
   const [searchQuery, setSearchQuery] = useState("");
-  const [companies, setCompanies] = useState<any[]>([]);
+  const [companies, setCompanies] = useState<CompanyPick[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const searchCompanies = async (q: string) => {
     setSearchQuery(q);
@@ -33,20 +37,66 @@ export default function OnboardingPage() {
       setCompanies([]);
       return;
     }
-    const res = await fetch(`/api/companies?q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    setCompanies(data);
+    const res = await fetch(`/api/companies?q=${encodeURIComponent(q)}`, {
+      credentials: "include",
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      setCompanies([]);
+      setError(
+        typeof data?.error === "string"
+          ? data.error
+          : "Could not search companies. Are you signed in?"
+      );
+      return;
+    }
+    setError(null);
+    setCompanies(Array.isArray(data) ? data : []);
+  };
+
+  const addCompany = (c: CompanyPick) => {
+    if (selectedIds.includes(c.id)) return;
+    if (selectedIds.length >= 5) return;
+    setSelectedIds((prev) => [...prev, c.id]);
+    setSelectedById((prev) => ({ ...prev, [c.id]: c }));
+    setSearchQuery("");
+    setCompanies([]);
   };
 
   const handleComplete = async () => {
     setLoading(true);
+    setError(null);
     try {
-      for (const companyId of selectedCompanies) {
-        await fetch("/api/watchlist", {
+      const keyword = role.trim();
+      if (!keyword) {
+        setError("Choose a role keyword.");
+        setLoading(false);
+        return;
+      }
+      if (selectedIds.length === 0) {
+        setError("Select at least one company.");
+        setLoading(false);
+        return;
+      }
+
+      for (const companyId of selectedIds) {
+        const res = await fetch("/api/watchlist", {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ companyId, roleKeyword: role }),
+          body: JSON.stringify({
+            companyId,
+            roleKeyword: keyword,
+          }),
         });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            typeof data.error === "string"
+              ? data.error
+              : `Could not add watchlist (${res.status})`
+          );
+        }
       }
 
       if ("Notification" in window && Notification.permission === "default") {
@@ -55,22 +105,29 @@ export default function OnboardingPage() {
 
       if ("serviceWorker" in navigator && "PushManager" in window) {
         try {
-          const registration = await navigator.serviceWorker.register("/sw.js");
-          const subscription = await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
-          });
-          await fetch("/api/push/subscribe", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(subscription.toJSON()),
-          });
+          const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+          if (vapid) {
+            const registration = await navigator.serviceWorker.register("/sw.js");
+            const subscription = await registration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(vapid) as BufferSource,
+            });
+            await fetch("/api/push/subscribe", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(subscription.toJSON()),
+            });
+          }
         } catch {
           // Push not available, proceed
         }
       }
 
       router.push("/dashboard");
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Setup failed.");
     } finally {
       setLoading(false);
     }
@@ -79,6 +136,12 @@ export default function OnboardingPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-lg">
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {error}
+          </div>
+        )}
+
         {/* Progress */}
         <div className="mb-8 flex items-center justify-center gap-2">
           {[1, 2, 3].map((s) => (
@@ -120,6 +183,7 @@ export default function OnboardingPage() {
               {POPULAR_ROLES.map((r) => (
                 <button
                   key={r}
+                  type="button"
                   onClick={() => setRole(r)}
                   className={cn(
                     "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
@@ -134,6 +198,7 @@ export default function OnboardingPage() {
             </div>
 
             <button
+              type="button"
               onClick={() => setStep(2)}
               disabled={!role.trim()}
               className="btn-primary w-full gap-2"
@@ -168,17 +233,12 @@ export default function OnboardingPage() {
               />
               {companies.length > 0 && (
                 <div className="absolute z-10 mt-1 w-full rounded-lg bg-white shadow-lg ring-1 ring-gray-200 max-h-48 overflow-auto">
-                  {companies.map((c: any) => (
+                  {companies.map((c) => (
                     <button
                       key={c.id}
-                      onClick={() => {
-                        if (!selectedCompanies.includes(c.id)) {
-                          setSelectedCompanies((prev) => [...prev, c.id]);
-                        }
-                        setSearchQuery("");
-                        setCompanies([]);
-                      }}
-                      disabled={selectedCompanies.includes(c.id)}
+                      type="button"
+                      onClick={() => addCompany(c)}
+                      disabled={selectedIds.includes(c.id)}
                       className="flex w-full items-center gap-3 px-3 py-2.5 hover:bg-gray-50 disabled:opacity-50"
                     >
                       <img
@@ -196,27 +256,31 @@ export default function OnboardingPage() {
               )}
             </div>
 
-            {selectedCompanies.length > 0 && (
+            {selectedIds.length > 0 && (
               <div className="mb-4 space-y-2">
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  Selected ({selectedCompanies.length}/5)
+                  Selected ({selectedIds.length}/5)
                 </p>
-                {selectedCompanies.map((id) => {
-                  const company = companies.find((c: any) => c.id === id);
+                {selectedIds.map((id) => {
+                  const company = selectedById[id];
                   return (
                     <div
                       key={id}
                       className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2"
                     >
                       <span className="text-sm text-gray-900">
-                        {company?.name || id}
+                        {company?.name ?? id}
                       </span>
                       <button
-                        onClick={() =>
-                          setSelectedCompanies((prev) =>
-                            prev.filter((c) => c !== id)
-                          )
-                        }
+                        type="button"
+                        onClick={() => {
+                          setSelectedIds((prev) => prev.filter((x) => x !== id));
+                          setSelectedById((prev) => {
+                            const next = { ...prev };
+                            delete next[id];
+                            return next;
+                          });
+                        }}
                         className="text-xs text-red-500 hover:text-red-700"
                       >
                         Remove
@@ -229,14 +293,16 @@ export default function OnboardingPage() {
 
             <div className="flex gap-3">
               <button
+                type="button"
                 onClick={() => setStep(1)}
                 className="btn-secondary flex-1"
               >
                 Back
               </button>
               <button
+                type="button"
                 onClick={() => setStep(3)}
-                disabled={selectedCompanies.length === 0}
+                disabled={selectedIds.length === 0}
                 className="btn-primary flex-1 gap-2"
               >
                 Continue <ChevronRight className="h-4 w-4" />
@@ -265,19 +331,21 @@ export default function OnboardingPage() {
               </h3>
               <ul className="space-y-1 text-sm text-brand-700">
                 <li>Role: {role}</li>
-                <li>Companies: {selectedCompanies.length} selected</li>
+                <li>Companies: {selectedIds.length} selected</li>
                 <li>Polling: Every 60 seconds</li>
               </ul>
             </div>
 
             <div className="flex gap-3">
               <button
+                type="button"
                 onClick={() => setStep(2)}
                 className="btn-secondary flex-1"
               >
                 Back
               </button>
               <button
+                type="button"
                 onClick={handleComplete}
                 disabled={loading}
                 className="btn-primary flex-1"

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Btn } from "@/components/ui/button";
 import { Divider } from "@/components/ui/divider";
+import { urlBase64ToUint8Array } from "@/lib/utils";
 
 interface Preferences {
   id: string;
@@ -10,6 +11,8 @@ interface Preferences {
   quietHoursEnd: string | null;
   emailMode: string;
   timezone: string;
+  telegramEnabled?: boolean;
+  telegramChatId?: string | null;
 }
 
 export function SettingsForm({
@@ -25,20 +28,15 @@ export function SettingsForm({
   );
   const [quietEnd, setQuietEnd] = useState(preferences.quietHoursEnd || "");
   const [timezone, setTimezone] = useState(preferences.timezone);
+  const [telegramEnabled, setTelegramEnabled] = useState(
+    Boolean(preferences.telegramEnabled)
+  );
+  const [telegramChatId, setTelegramChatId] = useState(
+    preferences.telegramChatId || ""
+  );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [enablingPush, setEnablingPush] = useState(false);
-
-  function urlBase64ToUint8Array(base64String: string): Uint8Array {
-    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
-    return outputArray;
-  }
 
   const handleEnablePush = async () => {
     const vapidPublic = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
@@ -65,7 +63,7 @@ export function SettingsForm({
         existing ||
         (await registration.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublic),
+          applicationServerKey: urlBase64ToUint8Array(vapidPublic) as BufferSource,
         }));
 
       const res = await fetch("/api/push/subscribe", {
@@ -102,6 +100,8 @@ export function SettingsForm({
           quietHoursStart: quietStart || null,
           quietHoursEnd: quietEnd || null,
           timezone,
+          telegramEnabled,
+          telegramChatId: telegramChatId.trim() || null,
         }),
       });
       setSaved(true);
@@ -167,6 +167,51 @@ export function SettingsForm({
               </Btn>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Telegram notifications */}
+      <div
+        className="overflow-hidden rounded-r3 bg-white"
+        style={{
+          border: "0.5px solid rgba(0,0,0,0.08)",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+        }}
+      >
+        <div className="p-[18px]">
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-[15px] font-semibold text-jr-text1 font-text">
+              Telegram Notifications
+            </h2>
+          </div>
+          <p className="mb-3 text-[13px] text-jr-text2 font-text">
+            Receive instant role alerts on Telegram.
+          </p>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-[13px] text-jr-text1 font-text">
+              <input
+                type="checkbox"
+                checked={telegramEnabled}
+                onChange={(e) => setTelegramEnabled(e.target.checked)}
+                className="h-4 w-4 accent-jr-accent"
+              />
+              Enable Telegram alerts
+            </label>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-jr-text2">
+                Telegram Chat ID
+              </label>
+              <input
+                className="input text-sm"
+                placeholder="e.g. 123456789"
+                value={telegramChatId}
+                onChange={(e) => setTelegramChatId(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-jr-text3">
+                Start a chat with your bot first, then use your numeric chat ID.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
