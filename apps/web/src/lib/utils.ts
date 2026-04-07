@@ -1,5 +1,21 @@
 import { clsx, type ClassValue } from "clsx";
 
+/**
+ * `new URL()` requires a scheme. Vercel env is sometimes set to a bare host
+ * (e.g. `app.vercel.app`); normalize to `https://…` (or `http://` for localhost).
+ */
+export function normalizeAbsoluteSiteUrl(raw: string | undefined): string {
+  const fallback = "http://localhost:3000";
+  if (!raw?.trim()) return fallback;
+  const s = raw.trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  const host = s.replace(/^\/+/, "");
+  if (/^(localhost|127\.0\.0\.1)(:|$)/i.test(host)) {
+    return `http://${host}`;
+  }
+  return `https://${host}`;
+}
+
 export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }

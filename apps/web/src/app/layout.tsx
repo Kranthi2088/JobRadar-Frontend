@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { normalizeAbsoluteSiteUrl } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "JobRadar — Real-Time Job Alerts",
   description:
     "Be the first to apply. JobRadar monitors company career pages and alerts you within 90 seconds of a new posting.",
-  metadataBase: new URL(process.env.NEXTAUTH_URL || "http://localhost:3000"),
+  metadataBase: new URL(normalizeAbsoluteSiteUrl(process.env.NEXTAUTH_URL)),
 };
 
 export default function RootLayout({
